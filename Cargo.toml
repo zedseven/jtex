@@ -1,0 +1,16 @@
+[package]
+name = "jtex"
+version = "0.1.0"
+authors = ["Zacchary Dempsey-Plante <zacc@ztdp.ca>"]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zedseven/jtex"
+homepage = "https://github.com/zedseven/jtex"
+description = "A crate for decoding Nintendo Jupiter Texture files."
+categories = [] # https://crates.io/categories
+keywords = []
+
+[dependencies]
+image = "0.24"
+nintendo-lz = { git = "https://gitlab.com/zedseven/nintendo-lz.git", branch = "split-library-binary" }
+thiserror = "1.0"
