@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  PROJECT_NAME: jtex
+  PROJECT_NAME: ${{ github.event.repository.name }}
   CARGO_TERM_COLOR: always
 
 permissions:
