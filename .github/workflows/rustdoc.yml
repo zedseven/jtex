@@ -6,6 +6,7 @@ on:
       - main
 
 env:
+  PROJECT_NAME: jtex
   CARGO_TERM_COLOR: always
 
 permissions:
@@ -36,8 +37,13 @@ jobs:
           command: doc
           args: --all --release --no-deps --lib
 
+      - name: Add index file
+        run: |
+          echo '<meta http-equiv="refresh" content="0; url='"$PROJECT_NAME"'">' > ./target/doc/index.html
+
       - name: Deploy
         uses: peaceiris/actions-gh-pages@v3
+        if: github.ref == 'refs/heads/main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./target/doc
