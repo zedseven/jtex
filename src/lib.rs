@@ -39,6 +39,7 @@
 )]
 
 // Modules
+mod colour_type;
 mod decoder;
 mod error;
 mod util;
