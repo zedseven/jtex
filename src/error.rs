@@ -7,9 +7,9 @@ use thiserror::Error;
 /// The crate error type.
 #[derive(Debug, Error)]
 pub enum Error {
-	#[error("format error: {0}")]
-	Format(String),
-	#[error("io error: {0}")]
+	#[error("unknown colour format: {0}")]
+	ColourFormat(u32),
+	#[error("I/O error: {0}")]
 	Io(#[from] IoError),
 	#[error("(de)compression error: {0}")]
 	Compression(#[from] NintendoLzError),

@@ -11,6 +11,7 @@ categories = [] # https://crates.io/categories
 keywords = []
 
 [dependencies]
+byteorder = "1.4"
 image = "0.24"
 nintendo-lz = { git = "https://gitlab.com/zedseven/nintendo-lz.git", branch = "split-library-binary" }
 thiserror = "1.0"

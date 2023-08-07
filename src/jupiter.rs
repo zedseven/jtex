@@ -1,20 +1,264 @@
 // Uses
-use std::{fs::File, io::Read, path::Path};
+use std::io::{Error as IoError, ErrorKind, Read};
 
+use byteorder::{ByteOrder, LittleEndian};
+use image::{ColorType, ExtendedColorType, ImageDecoder, ImageResult};
 use nintendo_lz::decompress_arr;
 
 use crate::{
 	error::{Error, NintendoLzError},
-	util::{decimal_ordinate_to_x_y, next_largest_power_of_2, next_multiple_of, print_bytes},
+	util::{decimal_ordinate_to_x_y, next_largest_power_of_2, next_multiple_of},
 };
 
 // Constants
-const DATA_TYPE_COMPRESSED: u8 = 0x11;
+const COMPRESSED_DATA_MARKER_LZ10: u8 = 0x10;
+const COMPRESSED_DATA_MARKER_LZ11: u8 = 0x11;
 const TILE_SIZE: u32 = 8;
 const TILE_AREA: u32 = TILE_SIZE * TILE_SIZE;
 
+// This implementation is a little silly, since it reads the whole image into
+// memory and doesn't stream its contents.
+// The reason is that this image format doesn't lend itself to streaming - its
+// compression algorithm and tiled nature make this unrealistic.
+// Fortunately, images of this type are often tiny, so this isn't much of a
+// concern.
+pub struct JupiterReader {
+	width:               u32,
+	height:              u32,
+	colour_type:         ColorType,
+	original_color_type: ExtendedColorType,
+	pixel_buffer:        Vec<u8>,
+	read_offset:         usize,
+}
+
+impl JupiterReader {
+	fn open<R>(mut reader: R) -> Result<JupiterReader, Error>
+	where
+		R: Read,
+	{
+		const BYTES_PER_U32: usize = 4;
+
+		let mut byte_buffer = Vec::new();
+		reader.read_to_end(&mut byte_buffer)?;
+
+		// If the first byte is a compressed data marker, the rest of the image data
+		// (including the header) is compressed
+		if byte_buffer[0] == COMPRESSED_DATA_MARKER_LZ10
+			|| byte_buffer[0] == COMPRESSED_DATA_MARKER_LZ11
+		{
+			byte_buffer = decompress_arr(byte_buffer.as_slice()).map_err(NintendoLzError::from)?;
+		}
+
+		if byte_buffer.len() < BYTES_PER_U32 * 4 {
+			return Err(Error::Io(IoError::new(
+				ErrorKind::UnexpectedEof,
+				"file ended early",
+			)));
+		}
+
+		let header_length = LittleEndian::read_u32(&byte_buffer[0x00..0x04]);
+		let colour_format =
+			JupiterColourType::try_from(LittleEndian::read_u32(&byte_buffer[0x04..0x08]))?;
+		let width = LittleEndian::read_u32(&byte_buffer[0x08..0x0C]);
+		let height = LittleEndian::read_u32(&byte_buffer[0x0C..0x10]);
+		let area = width * height;
+
+		let padded_width = next_largest_power_of_2(next_multiple_of(TILE_SIZE, width));
+		let padded_height = next_largest_power_of_2(next_multiple_of(TILE_SIZE, height));
+		let padded_area = padded_width * padded_height;
+
+		if padded_area
+			!= (byte_buffer[(header_length as usize)..].len() / colour_format.bytes_per_pixel())
+				as u32
+		{
+			return Err(Error::Io(IoError::new(
+				ErrorKind::UnexpectedEof,
+				"file ended early",
+			)));
+		}
+
+		let original_color_type = ExtendedColorType::from(colour_format);
+		let output_colour_type = ColorType::from(colour_format);
+		let input_bytes_per_pixel = colour_format.bytes_per_pixel();
+		let output_bytes_per_pixel = output_colour_type.bytes_per_pixel() as usize;
+
+		let mut pixel_buffer = vec![0u8; area as usize * output_bytes_per_pixel];
+
+		let tiles_per_row = padded_width / TILE_SIZE;
+
+		for (input_pixel_index, image_byte_chunk) in byte_buffer[(header_length as usize)..]
+			.chunks(input_bytes_per_pixel)
+			.enumerate()
+		{
+			let tile_index = input_pixel_index as u32 / TILE_AREA;
+			let tile_x = tile_index % tiles_per_row;
+			let tile_y = tile_index / tiles_per_row;
+			let (mut pixel_x, mut pixel_y) =
+				decimal_ordinate_to_x_y(input_pixel_index as u32 % TILE_AREA);
+			pixel_x += tile_x * TILE_SIZE;
+			pixel_y += tile_y * TILE_SIZE;
+
+			// Crop out the padding pixels
+			if pixel_x >= width || pixel_y >= height {
+				continue;
+			}
+
+			let output_pixel_index = (pixel_y * width + pixel_x) as usize * output_bytes_per_pixel;
+
+			Self::copy_and_convert_pixel_data(
+				image_byte_chunk,
+				&mut pixel_buffer
+					[output_pixel_index..(output_pixel_index + output_bytes_per_pixel)],
+				colour_format,
+			);
+		}
+
+		Ok(Self {
+			width,
+			height,
+			colour_type: output_colour_type,
+			original_color_type,
+			pixel_buffer,
+			read_offset: 0,
+		})
+	}
+
+	fn copy_and_convert_pixel_data(
+		input_chunk: &[u8],
+		output_chunk: &mut [u8],
+		input_colour_type: JupiterColourType,
+	) {
+		const MULTIPLIER_1_BIT_TO_8_BIT: u8 = 0xFF;
+		/// Calculated by multiplying every possible value in a 0..2^4 (0..16)
+		/// range by (2^8 - 1) / (2^4 - 1), then rounding to the nearest integer
+		const LOOKUP_TABLE_4_BIT_TO_8_BIT: [u8; 16] = [
+			0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD,
+			0xEE, 0xFF,
+		];
+		/// Calculated by multiplying every possible value in a 0..2^5 (0..32)
+		/// range by (2^8 - 1) / (2^5 - 1), then rounding to the nearest integer
+		const LOOKUP_TABLE_5_BIT_TO_8_BIT: [u8; 32] = [
+			0x00, 0x08, 0x10, 0x19, 0x21, 0x29, 0x31, 0x3A, 0x42, 0x4A, 0x52, 0x5A, 0x63, 0x6B,
+			0x73, 0x7B, 0x84, 0x8C, 0x94, 0x9C, 0xA5, 0xAD, 0xB5, 0xBD, 0xC5, 0xCE, 0xD6, 0xDE,
+			0xE6, 0xEF, 0xF7, 0xFF,
+		];
+
+		let output_colour_type = ColorType::from(input_colour_type);
+
+		assert_eq!(
+			input_chunk.len(),
+			input_colour_type.bytes_per_pixel(),
+			"input chunk size should match the bytes per pixel count of the input colour type"
+		);
+		assert_eq!(
+			output_chunk.len(),
+			output_colour_type.bytes_per_pixel() as usize,
+			"output chunk size should match the bytes per pixel count of the output colour type"
+		);
+
+		match input_colour_type {
+			JupiterColourType::L8 => {
+				// Both input and output are the same, so a simple copy works here
+				output_chunk.copy_from_slice(input_chunk)
+			}
+			JupiterColourType::Rgba4444 => {
+				output_chunk[0] =
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[1] >> 4) & 0b00001111) as usize];
+				output_chunk[1] =
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[1] & 0b00001111) as usize];
+				output_chunk[2] =
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[0] >> 4) & 0b00001111) as usize];
+				output_chunk[3] =
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[0] & 0b00001111) as usize];
+			}
+			JupiterColourType::Rgba5551 => {
+				let complete_value = LittleEndian::read_u16(input_chunk);
+
+				output_chunk[0] = LOOKUP_TABLE_5_BIT_TO_8_BIT
+					[((complete_value & 0b1111100000000000) >> 11) as usize];
+				output_chunk[1] = LOOKUP_TABLE_5_BIT_TO_8_BIT
+					[((complete_value & 0b0000011111000000) >> 6) as usize];
+				output_chunk[2] = LOOKUP_TABLE_5_BIT_TO_8_BIT
+					[((complete_value & 0b0000000000111110) >> 1) as usize];
+				output_chunk[3] =
+					(complete_value & 0b0000000000000001) as u8 * MULTIPLIER_1_BIT_TO_8_BIT;
+			}
+			JupiterColourType::Rgb888 => {
+				output_chunk[0] = input_chunk[2];
+				output_chunk[1] = input_chunk[1];
+				output_chunk[2] = input_chunk[0];
+			}
+			JupiterColourType::Rgba8888 => {
+				output_chunk[0] = input_chunk[3];
+				output_chunk[1] = input_chunk[2];
+				output_chunk[2] = input_chunk[1];
+				output_chunk[3] = input_chunk[0];
+			}
+		}
+	}
+}
+
+impl Read for JupiterReader {
+	fn read(&mut self, buffer: &mut [u8]) -> Result<usize, IoError> {
+		let mut readable_length = self.pixel_buffer.len() - self.read_offset;
+		if buffer.len() < readable_length {
+			readable_length = buffer.len();
+		}
+
+		if readable_length > 0 {
+			let mut buffer_slice = &mut buffer[0..readable_length];
+			buffer_slice.copy_from_slice(
+				&self.pixel_buffer[self.read_offset..(self.read_offset + readable_length)],
+			);
+
+			self.read_offset += readable_length;
+		}
+
+		Ok(readable_length)
+	}
+}
+
+pub struct JupiterDecoder {
+	reader: JupiterReader,
+}
+
+impl JupiterDecoder {
+	pub fn new<R>(inner_reader: R) -> Result<JupiterDecoder, Error>
+	where
+		R: Read,
+	{
+		Ok(Self {
+			reader: JupiterReader::open(inner_reader)?,
+		})
+	}
+}
+
+impl ImageDecoder<'_> for JupiterDecoder {
+	type Reader = JupiterReader;
+
+	fn dimensions(&self) -> (u32, u32) {
+		(self.reader.width, self.reader.height)
+	}
+
+	fn color_type(&self) -> ColorType {
+		self.reader.colour_type
+	}
+
+	fn original_color_type(&self) -> ExtendedColorType {
+		self.reader.original_color_type
+	}
+
+	fn into_reader(self) -> ImageResult<Self::Reader> {
+		Ok(self.reader)
+	}
+
+	fn total_bytes(&self) -> u64 {
+		self.reader.pixel_buffer.len() as u64
+	}
+}
+
 #[derive(Clone, Copy, Debug)]
-pub enum ColourType {
+pub enum JupiterColourType {
 	/// 8 bits per pixel, luminance-only (greyscale)
 	L8,
 	/// 16 bits per pixel, RGBA (4 bits per channel)
@@ -27,232 +271,64 @@ pub enum ColourType {
 	Rgba8888,
 }
 
-impl ColourType {
-	pub fn bits_per_pixel(self) -> usize {
+impl JupiterColourType {
+	pub fn bytes_per_pixel(self) -> usize {
 		match self {
-			Self::L8 => 8,
-			Self::Rgba4444 => 16,
-			Self::Rgba5551 => 16,
-			Self::Rgb888 => 24,
-			Self::Rgba8888 => 32,
+			Self::L8 => 1,
+			Self::Rgba4444 => 2,
+			Self::Rgba5551 => 2,
+			Self::Rgb888 => 3,
+			Self::Rgba8888 => 4,
 		}
 	}
 
-	pub fn bytes_per_pixel(self) -> usize {
+	pub fn bits_per_pixel(self) -> usize {
 		const BITS_PER_BYTE: usize = 8;
 
-		self.bits_per_pixel() / BITS_PER_BYTE
+		self.bytes_per_pixel() * BITS_PER_BYTE
 	}
 }
 
-impl TryFrom<u32> for ColourType {
+impl TryFrom<u32> for JupiterColourType {
 	type Error = Error;
 
 	fn try_from(raw_format: u32) -> Result<Self, Self::Error> {
 		match raw_format {
-			0 => Ok(ColourType::L8),
-			2 => Ok(ColourType::Rgba8888),
-			3 => Ok(ColourType::Rgb888),
-			4 => Ok(ColourType::Rgba4444),
+			0 => Ok(JupiterColourType::L8),
+			2 => Ok(JupiterColourType::Rgba8888),
+			3 => Ok(JupiterColourType::Rgb888),
+			4 => Ok(JupiterColourType::Rgba4444),
 			// 6 is conjecture
-			5 | 6 => Ok(ColourType::Rgba5551),
-			_ => Err(Error::Format(format!(
-				"unknown colour format: {raw_format}"
-			))),
+			5 | 6 => Ok(JupiterColourType::Rgba5551),
+			_ => Err(Error::ColourFormat(raw_format)),
 		}
 	}
 }
 
-/// RGBA8888 Pixel.
-#[derive(Clone, Debug, Default)]
-pub struct Pixel {
-	pub red:   u8,
-	pub green: u8,
-	pub blue:  u8,
-	pub alpha: u8,
-}
+impl From<JupiterColourType> for ColorType {
+	fn from(value: JupiterColourType) -> Self {
+		use JupiterColourType::*;
 
-impl Pixel {
-	pub fn from_byte_chunk(chunk: &[u8], colour_type: ColourType) -> Self {
-		/// Calculated as (2^8 - 1) / (2^1 - 1)
-		const BIT_TO_BYTE_MULTIPLIER: u8 = 255;
-		/// Calculated as (2^8 - 1) / (2^4 - 1)
-		const NIBBLE_TO_BYTE_MULTIPLIER: u8 = 255 / 15;
-		/// Calculated by multiplying every possible value in a 0..2^5 (0..32)
-		/// range by (2^8 - 1) / (2^5 - 1), then rounding to the nearest integer
-		const PENTAD_TO_BYTE_TABLE: [u8; 32] = [
-			0x00, 0x08, 0x10, 0x19, 0x21, 0x29, 0x31, 0x3A, 0x42, 0x4A, 0x52, 0x5A, 0x63, 0x6B,
-			0x73, 0x7B, 0x84, 0x8C, 0x94, 0x9C, 0xA5, 0xAD, 0xB5, 0xBD, 0xC5, 0xCE, 0xD6, 0xDE,
-			0xE6, 0xEF, 0xF7, 0xFF,
-		];
-
-		assert_eq!(
-			chunk.len(),
-			colour_type.bytes_per_pixel(),
-			"byte chunk size should match the bytes per pixel count of the colour type"
-		);
-
-		match colour_type {
-			ColourType::L8 => Self {
-				red:   chunk[0],
-				green: chunk[0],
-				blue:  chunk[0],
-				alpha: 0xFF,
-			},
-			ColourType::Rgba4444 => Self {
-				red:   ((chunk[1] >> 4) & 0b00001111) * NIBBLE_TO_BYTE_MULTIPLIER,
-				green: (chunk[1] & 0b00001111) * NIBBLE_TO_BYTE_MULTIPLIER,
-				blue:  ((chunk[0] >> 4) & 0b00001111) * NIBBLE_TO_BYTE_MULTIPLIER,
-				alpha: (chunk[0] & 0b00001111) * NIBBLE_TO_BYTE_MULTIPLIER,
-			},
-			ColourType::Rgba5551 => {
-				let complete_value = u16::from_le_bytes(chunk.try_into().unwrap());
-
-				Self {
-					red:   PENTAD_TO_BYTE_TABLE
-						[((complete_value & 0b1111100000000000) >> 11) as usize],
-					green: PENTAD_TO_BYTE_TABLE
-						[((complete_value & 0b0000011111000000) >> 6) as usize],
-					blue:  PENTAD_TO_BYTE_TABLE
-						[((complete_value & 0b0000000000111110) >> 1) as usize],
-					alpha: (complete_value & 0b0000000000000001) as u8 * BIT_TO_BYTE_MULTIPLIER,
-				}
-			}
-			ColourType::Rgb888 => Self {
-				red:   chunk[2],
-				green: chunk[1],
-				blue:  chunk[0],
-				alpha: 0xFF,
-			},
-
-			ColourType::Rgba8888 => Self {
-				red:   chunk[3],
-				green: chunk[2],
-				blue:  chunk[1],
-				alpha: chunk[0],
-			},
+		match value {
+			L8 => Self::L8,
+			Rgba4444 => Self::Rgba8,
+			Rgba5551 => Self::Rgba8,
+			Rgb888 => Self::Rgb8,
+			Rgba8888 => Self::Rgba8,
 		}
 	}
 }
 
-#[derive(Debug)]
-pub struct Jupiter {
-	width:      u32,
-	height:     u32,
-	image_data: Vec<Pixel>,
-}
+impl From<JupiterColourType> for ExtendedColorType {
+	fn from(value: JupiterColourType) -> Self {
+		use JupiterColourType::*;
 
-impl Jupiter {
-	pub fn new(raw_bytes: &[u8]) -> Result<Self, Error> {
-		let mut decompressed_data = None;
-		let is_compressed = raw_bytes[0] == DATA_TYPE_COMPRESSED;
-
-		let all_bytes = if is_compressed {
-			decompressed_data = Some(decompress_arr(raw_bytes).map_err(NintendoLzError::from)?);
-
-			decompressed_data.as_ref().unwrap().as_slice()
-		} else {
-			raw_bytes
-		};
-
-		print_bytes(raw_bytes);
-		println!();
-		print_bytes(all_bytes);
-		println!();
-
-		let header_length = u32::from_le_bytes(all_bytes[0x0..0x4].try_into().unwrap());
-		let colour_type =
-			ColourType::try_from(u32::from_le_bytes(all_bytes[0x4..0x8].try_into().unwrap()))?;
-		let width = u32::from_le_bytes(all_bytes[0x8..0xC].try_into().unwrap());
-		let height = u32::from_le_bytes(all_bytes[0xC..0x10].try_into().unwrap());
-
-		dbg!(header_length);
-		dbg!(colour_type);
-		dbg!(width);
-		dbg!(height);
-
-		let image_bytes = &all_bytes[(header_length as usize)..];
-
-		let new_width = next_largest_power_of_2(next_multiple_of(TILE_SIZE, width));
-		let new_height = next_largest_power_of_2(next_multiple_of(TILE_SIZE, height));
-
-		dbg!(new_width);
-		dbg!(new_height);
-
-		let new_area = new_width * new_height;
-		if new_area != (image_bytes.len() / colour_type.bytes_per_pixel()) as u32 {
-			return Err(Error::Format("image data length mismatch".to_owned()));
+		match value {
+			L8 => Self::L8,
+			Rgba4444 => Self::Rgba4,
+			Rgba5551 => Self::Unknown(5),
+			Rgb888 => Self::Rgb8,
+			Rgba8888 => Self::Rgba8,
 		}
-
-		let mut image_data = vec![Pixel::default(); new_area as usize];
-		let tiles_per_row = {
-			let x = new_width / TILE_SIZE;
-			if x == 0 {
-				1
-			} else {
-				x
-			}
-		};
-
-		for (input_pixel_index, image_byte_chunk) in image_bytes
-			.chunks(colour_type.bytes_per_pixel())
-			.enumerate()
-		{
-			let tile_index = input_pixel_index as u32 / TILE_AREA;
-			let tile_x = tile_index % tiles_per_row;
-			let tile_y = tile_index / tiles_per_row;
-			// let pixel_x = tile_x * TILE_SIZE + (input_pixel_index as u32 % TILE_AREA) %
-			// TILE_SIZE; let pixel_y = tile_y * TILE_SIZE + (input_pixel_index as u32 %
-			// TILE_AREA) / TILE_SIZE;
-			let (mut pixel_x, mut pixel_y) =
-				decimal_ordinate_to_x_y(input_pixel_index as u32 % TILE_AREA);
-			pixel_x += tile_x * TILE_SIZE;
-			pixel_y += tile_y * TILE_SIZE;
-
-			let output_pixel_index = pixel_y * new_width + pixel_x;
-
-			// dbg!(input_pixel_index);
-			// dbg!(tile_index);
-			// dbg!(tile_x);
-			// dbg!(tile_y);
-			// dbg!(pixel_x);
-			// dbg!(pixel_y);
-			// dbg!(output_pixel_index);
-			// dbg!(image_byte_chunk);
-
-			image_data[output_pixel_index as usize] =
-				Pixel::from_byte_chunk(image_byte_chunk, colour_type);
-		}
-
-		Ok(Self {
-			width: new_width,
-			height: new_height,
-			image_data,
-		})
-	}
-
-	pub fn open<P>(path: P) -> Result<Self, Error>
-	where
-		P: AsRef<Path>,
-	{
-		let mut file = File::open(path)?;
-		let file_length = file.metadata()?.len() as usize;
-		let mut buffer = vec![0; file_length];
-
-		file.read_exact(&mut buffer)?;
-
-		Self::new(&buffer)
-	}
-
-	pub fn get_width(&self) -> u32 {
-		self.width
-	}
-
-	pub fn get_height(&self) -> u32 {
-		self.height
-	}
-
-	pub fn get_image_data(&self) -> &Vec<Pixel> {
-		&self.image_data
 	}
 }
