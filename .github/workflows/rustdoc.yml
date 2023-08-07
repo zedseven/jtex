@@ -1,0 +1,40 @@
+name: Rustdoc
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rustdoc:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Install `nightly` toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          components: rust-docs
+          override: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Cargo Doc
+        uses: actions-rs/cargo@v1
+        with:
+          command: doc
+          args: --all --release --no-deps --lib
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
