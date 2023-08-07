@@ -223,12 +223,12 @@ pub struct JupiterDecoder {
 }
 
 impl JupiterDecoder {
-	pub fn new<R>(inner_reader: R) -> Result<JupiterDecoder, Error>
+	pub fn new<R>(reader: R) -> Result<JupiterDecoder, Error>
 	where
 		R: Read,
 	{
 		Ok(Self {
-			reader: JupiterReader::open(inner_reader)?,
+			reader: JupiterReader::open(reader)?,
 		})
 	}
 }
@@ -259,7 +259,7 @@ impl ImageDecoder<'_> for JupiterDecoder {
 
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
-pub enum JupiterColourType {
+enum JupiterColourType {
 	/// 8 bits per pixel, luminance-only (greyscale)
 	L8,
 	/// 16 bits per pixel, RGBA (4 bits per channel)

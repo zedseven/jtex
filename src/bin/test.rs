@@ -1,7 +1,7 @@
 use std::{env::args, error::Error as ErrorTrait, fs::File};
 
 use image::{DynamicImage, ImageFormat};
-use jtex::jupiter::JupiterDecoder;
+use jtex::JupiterDecoder;
 
 pub fn main() -> Result<(), Box<dyn ErrorTrait>> {
 	let args = args().collect::<Vec<_>>();

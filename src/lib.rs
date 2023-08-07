@@ -38,7 +38,10 @@
 	unused_macros
 )]
 
-// Exports
-pub mod error;
-pub mod jupiter;
+// Modules
+mod decoder;
+mod error;
 mod util;
+
+// Exports
+pub use self::{decoder::*, error::*};
