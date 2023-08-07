@@ -30,6 +30,10 @@ pub enum NintendoLzError {
 	/// A configured parameter is out of range.
 	#[error(transparent)]
 	OutOfRange(OutOfRangeError),
+	/// Any other error that may come from `nintendo-lz`, including standard
+	/// errors.
+	#[error("unknown `nintendo-lz` error: {0}")]
+	Unknown(Box<dyn StdError>),
 }
 
 impl From<Box<dyn StdError>> for NintendoLzError {
@@ -39,7 +43,7 @@ impl From<Box<dyn StdError>> for NintendoLzError {
 		} else if let Some(e) = error.downcast_ref::<OutOfRangeError>() {
 			NintendoLzError::OutOfRange(e.clone())
 		} else {
-			panic!("unknown `nintendo-lz` error: {}", error.as_ref());
+			NintendoLzError::Unknown(error)
 		}
 	}
 }
