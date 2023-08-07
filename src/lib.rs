@@ -1,4 +1,24 @@
-//! A crate for decoding Nintendo Jupiter Texture files.
+//! A crate for decoding Nintendo Jupiter Texture files, integrated with the
+//! `image` crate.
+//!
+//! # Usage
+//! ```rust,no_run
+//! # use std::{error::Error, fs::File};
+//! #
+//! # use image::{DynamicImage, ImageFormat};
+//! # use jtex::JupiterDecoder;
+//! #
+//! # fn main() -> Result<(), Box<dyn Error>> {
+//! #
+//! let file = File::open("Prs_P_254_C.jtex")?;
+//! let decoder = JupiterDecoder::decode(file)?;
+//! let image = DynamicImage::from_decoder(decoder)?;
+//!
+//! image.save_with_format("Prs_P_254_C.png", ImageFormat::Png)?;
+//! #
+//! # Ok(())
+//! # }
+//! ```
 
 // Linting Rules
 #![warn(
