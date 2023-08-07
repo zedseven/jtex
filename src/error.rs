@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// The crate error type.
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum Error {
 	#[error("unknown colour format: {0}")]
 	ColourFormat(u32),
@@ -16,6 +17,7 @@ pub enum Error {
 }
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum NintendoLzError {
 	#[error(transparent)]
 	InvalidMagicNumber(InvalidMagicNumberError),

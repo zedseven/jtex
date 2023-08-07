@@ -159,29 +159,29 @@ impl JupiterReader {
 		match input_colour_type {
 			JupiterColourType::L8 => {
 				// Both input and output are the same, so a simple copy works here
-				output_chunk.copy_from_slice(input_chunk)
+				output_chunk.copy_from_slice(input_chunk);
 			}
 			JupiterColourType::Rgba4444 => {
 				output_chunk[0] =
-					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[1] >> 4) & 0b00001111) as usize];
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[1] >> 4) & 0b0000_1111) as usize];
 				output_chunk[1] =
-					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[1] & 0b00001111) as usize];
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[1] & 0b0000_1111) as usize];
 				output_chunk[2] =
-					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[0] >> 4) & 0b00001111) as usize];
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[((input_chunk[0] >> 4) & 0b0000_1111) as usize];
 				output_chunk[3] =
-					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[0] & 0b00001111) as usize];
+					LOOKUP_TABLE_4_BIT_TO_8_BIT[(input_chunk[0] & 0b0000_1111) as usize];
 			}
 			JupiterColourType::Rgba5551 => {
 				let complete_value = LittleEndian::read_u16(input_chunk);
 
 				output_chunk[0] = LOOKUP_TABLE_5_BIT_TO_8_BIT
-					[((complete_value & 0b1111100000000000) >> 11) as usize];
+					[((complete_value & 0b1111_1000_0000_0000) >> 11) as usize];
 				output_chunk[1] = LOOKUP_TABLE_5_BIT_TO_8_BIT
-					[((complete_value & 0b0000011111000000) >> 6) as usize];
+					[((complete_value & 0b0000_0111_1100_0000) >> 6) as usize];
 				output_chunk[2] = LOOKUP_TABLE_5_BIT_TO_8_BIT
-					[((complete_value & 0b0000000000111110) >> 1) as usize];
+					[((complete_value & 0b0000_0000_0011_1110) >> 1) as usize];
 				output_chunk[3] =
-					(complete_value & 0b0000000000000001) as u8 * MULTIPLIER_1_BIT_TO_8_BIT;
+					(complete_value & 0b0000_0000_0000_0001) as u8 * MULTIPLIER_1_BIT_TO_8_BIT;
 			}
 			JupiterColourType::Rgb888 => {
 				output_chunk[0] = input_chunk[2];
@@ -206,7 +206,7 @@ impl Read for JupiterReader {
 		}
 
 		if readable_length > 0 {
-			let mut buffer_slice = &mut buffer[0..readable_length];
+			let buffer_slice = &mut buffer[0..readable_length];
 			buffer_slice.copy_from_slice(
 				&self.pixel_buffer[self.read_offset..(self.read_offset + readable_length)],
 			);
@@ -258,6 +258,7 @@ impl ImageDecoder<'_> for JupiterDecoder {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub enum JupiterColourType {
 	/// 8 bits per pixel, luminance-only (greyscale)
 	L8,
@@ -272,16 +273,17 @@ pub enum JupiterColourType {
 }
 
 impl JupiterColourType {
+	#[must_use]
 	pub fn bytes_per_pixel(self) -> usize {
 		match self {
 			Self::L8 => 1,
-			Self::Rgba4444 => 2,
-			Self::Rgba5551 => 2,
+			Self::Rgba4444 | Self::Rgba5551 => 2,
 			Self::Rgb888 => 3,
 			Self::Rgba8888 => 4,
 		}
 	}
 
+	#[must_use]
 	pub fn bits_per_pixel(self) -> usize {
 		const BITS_PER_BYTE: usize = 8;
 
@@ -307,21 +309,19 @@ impl TryFrom<u32> for JupiterColourType {
 
 impl From<JupiterColourType> for ColorType {
 	fn from(value: JupiterColourType) -> Self {
-		use JupiterColourType::*;
+		use JupiterColourType::{Rgb888, Rgba4444, Rgba5551, Rgba8888, L8};
 
 		match value {
 			L8 => Self::L8,
-			Rgba4444 => Self::Rgba8,
-			Rgba5551 => Self::Rgba8,
 			Rgb888 => Self::Rgb8,
-			Rgba8888 => Self::Rgba8,
+			Rgba4444 | Rgba5551 | Rgba8888 => Self::Rgba8,
 		}
 	}
 }
 
 impl From<JupiterColourType> for ExtendedColorType {
 	fn from(value: JupiterColourType) -> Self {
-		use JupiterColourType::*;
+		use JupiterColourType::{Rgb888, Rgba4444, Rgba5551, Rgba8888, L8};
 
 		match value {
 			L8 => Self::L8,
