@@ -8,19 +8,26 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum Error {
-	#[error("unknown colour format: {0}")]
-	ColourFormat(u32),
+	/// The decoder encountered a Jupiter colour type that it does not
+	/// recognise.
+	#[error("unknown colour type: {0}")]
+	ColourType(u32),
+	/// An I/O error occurred.
 	#[error("I/O error: {0}")]
 	Io(#[from] IoError),
+	/// An error occurred during (de)compression.
 	#[error("(de)compression error: {0}")]
 	Compression(#[from] NintendoLzError),
 }
 
+/// A wrapper error type for errors that come from `nintendo-lz`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum NintendoLzError {
+	/// The magic number for the format is invalid.
 	#[error(transparent)]
 	InvalidMagicNumber(InvalidMagicNumberError),
+	/// A configured parameter is out of range.
 	#[error(transparent)]
 	OutOfRange(OutOfRangeError),
 }

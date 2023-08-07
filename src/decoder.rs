@@ -17,12 +17,9 @@ const COMPRESSED_DATA_MARKER_LZ11: u8 = 0x11;
 const TILE_SIZE: u32 = 8;
 const TILE_AREA: u32 = TILE_SIZE * TILE_SIZE;
 
-// This implementation is a little silly, since it reads the whole image into
-// memory and doesn't stream its contents.
-// The reason is that this image format doesn't lend itself to streaming - its
-// compression algorithm and tiled nature make this unrealistic.
-// Fortunately, images of this type are often tiny, so this isn't much of a
-// concern.
+/// The internal reader type for loading Jupiter Texture images.
+///
+/// Please obtain this by creating a [`JupiterDecoder`].
 pub struct JupiterReader {
 	width:               u32,
 	height:              u32,
@@ -33,6 +30,14 @@ pub struct JupiterReader {
 }
 
 impl JupiterReader {
+	/// This implementation is a little silly, since it reads the whole image
+	/// into memory and doesn't stream its contents.
+	///
+	/// The reason is that this image format doesn't lend itself to streaming -
+	/// its compression algorithm and tiled nature make this unrealistic.
+	///
+	/// Fortunately, images of this type are often tiny, so this isn't much of a
+	/// concern.
 	fn open<R>(mut reader: R) -> Result<JupiterReader, Error>
 	where
 		R: Read,
@@ -159,8 +164,7 @@ impl JupiterReader {
 
 		match input_colour_type {
 			JupiterColourType::L8 => {
-				// Both input and output are the same, so a simple copy works here
-				output_chunk.copy_from_slice(input_chunk);
+				output_chunk[0] = input_chunk[0];
 			}
 			JupiterColourType::Rgba4444 => {
 				output_chunk[0] =
@@ -219,12 +223,23 @@ impl Read for JupiterReader {
 	}
 }
 
+/// The main struct for decoding Jupiter Texture images.
+///
+/// This is intended to be used alongside the [`image`] crate, as it implements
+/// the [`ImageDecoder`] trait.
 pub struct JupiterDecoder {
 	reader: JupiterReader,
 }
 
 impl JupiterDecoder {
-	pub fn new<R>(reader: R) -> Result<JupiterDecoder, Error>
+	/// Decode the contents provided by the `reader`.
+	///
+	/// This decoder will read the image contents into memory immediately,
+	/// because the image format does not lend itself to streaming.
+	///
+	/// # Errors
+	/// May return any variant of the crate error type, [`Error`].
+	pub fn decode<R>(reader: R) -> Result<JupiterDecoder, Error>
 	where
 		R: Read,
 	{

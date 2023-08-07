@@ -11,7 +11,7 @@ pub fn main() -> Result<(), Box<dyn ErrorTrait>> {
 
 	// "/mnt/Emus/Tools/DotNet 3DS Toolkit/RawFiles/RomFS/Prs_P_254_C.jtex"
 	let file = File::open(args[1].as_str())?;
-	let decoder = JupiterDecoder::new(file)?;
+	let decoder = JupiterDecoder::decode(file)?;
 	let image = DynamicImage::from_decoder(decoder)?;
 	image.save_with_format("test.png", ImageFormat::Png)?;
 

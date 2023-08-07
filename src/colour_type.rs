@@ -48,7 +48,7 @@ impl TryFrom<u32> for JupiterColourType {
 			4 => Ok(JupiterColourType::Rgba4444),
 			// 6 is conjecture
 			5 | 6 => Ok(JupiterColourType::Rgba5551),
-			_ => Err(Error::ColourFormat(raw_format)),
+			_ => Err(Error::ColourType(raw_format)),
 		}
 	}
 }
