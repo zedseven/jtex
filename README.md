@@ -7,6 +7,17 @@ A crate for decoding Nintendo Jupiter Texture files.
 Based on the work of [jtex_view](https://github.com/zedseven/jtex_view) and
 [Kuriimu2](https://github.com/FanTranslatorsInternational/Kuriimu2/blob/dev/plugins/Nintendo/plugin_nintendo/Images/RawJtex.cs).
 
+## Usage
+```rust
+let file = File::open("Prs_P_254_C.jtex")?;
+let decoder = JupiterDecoder::decode(file)?;
+let image = DynamicImage::from_decoder(decoder)?;
+
+image.save_with_format("Prs_P_254_C.png", ImageFormat::Png)?;
+```
+
+Please refer to the [API Documentation](https://zedseven.github.io/jtex/) for more information.
+
 ## Project License
 This project is licensed under either of
 
